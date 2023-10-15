@@ -10,13 +10,14 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.PriorityQueue;
-import java.util.concurrent.Executor;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
-public class PeriodicExecutor {
+public class PeriodicExecutor implements AutoCloseable {
 
     private static final String CHECKER_THREAD_NAME = "task-queue-checker-thread";
 
@@ -30,7 +31,7 @@ public class PeriodicExecutor {
     private final List<Consumer<PeriodicTask>> postExecuteExtensions;
 
     @Setter
-    private Executor taskExecutor;
+    private ExecutorService taskExecutor;
 
     public PeriodicExecutor() {
         queue = new PriorityQueue<>();
@@ -110,8 +111,8 @@ public class PeriodicExecutor {
                 }
 
                 preExecute(task);
-                execute(task);
-                postExecute(task);
+                CompletableFuture.runAsync(task.getTask(), taskExecutor)
+                        .thenRun(() -> postExecute(task));
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -125,10 +126,6 @@ public class PeriodicExecutor {
 
         PeriodicTask task = queue.peek();
         return Instant.now().isBefore(task.getExecuteAt());
-    }
-
-    private void execute(PeriodicTask task) {
-        taskExecutor.execute(task.getTask());
     }
 
     private void preExecute(PeriodicTask task) {
@@ -148,5 +145,11 @@ public class PeriodicExecutor {
                 addTaskInternal(newTask);
             }
         });
+    }
+
+    @Override
+    public void close() {
+        taskExecutor.shutdown();
+        checkerThread.interrupt();
     }
 }
